@@ -1,27 +1,21 @@
-import { execFile } from 'child_process';
+import { YouTube } from 'youtube-sr';
+import ytdl from '@distube/ytdl-core';
 import { CameraSource } from './base.js';
 import type { Camera, Category, SearchFilters } from '../types.js';
 import { formatCameraId } from '../types.js';
-import { captureYouTubeFrame, fetchImage, isFfmpegAvailable, isYtDlpAvailable } from '../screenshot.js';
+import { captureYouTubeFrame, fetchImage } from '../screenshot.js';
 import { Cache } from '../cache.js';
 
 export class YouTubeSource extends CameraSource {
   readonly name = 'youtube' as const;
   readonly displayName = 'YouTube Live Streams';
   readonly requiresApiKey = false;
-  readonly requiresFfmpeg = true;
+  readonly requiresFfmpeg = false;
 
-  private _available: boolean | null = null;
   private searchCache = new Cache<Camera[]>(30 * 60 * 1000); // 30 min
 
   async isAvailable(): Promise<boolean> {
-    if (this._available !== null) return this._available;
-    const [ffmpeg, ytdlp] = await Promise.all([
-      isFfmpegAvailable(),
-      isYtDlpAvailable(),
-    ]);
-    this._available = ffmpeg && ytdlp;
-    return this._available;
+    return true; // All deps are npm packages — always available
   }
 
   async searchCameras(filters: SearchFilters): Promise<Camera[]> {
@@ -32,7 +26,6 @@ export class YouTubeSource extends CameraSource {
     const cached = this.searchCache.get(cacheKey);
     if (cached) return cached;
 
-    // Search YouTube for live webcam streams via yt-dlp
     const searchCount = Math.min(limit * 2, 30);
     const cameras = await this.ytSearch(query, searchCount);
 
@@ -44,9 +37,9 @@ export class YouTubeSource extends CameraSource {
   async getCamera(nativeId: string): Promise<Camera | null> {
     if (!/^[a-zA-Z0-9_-]{11}$/.test(nativeId)) return null;
 
-    // Verify the video exists and get its title via yt-dlp
     try {
-      const title = await this.getVideoTitle(nativeId);
+      const info = await ytdl.getBasicInfo(`https://www.youtube.com/watch?v=${nativeId}`);
+      const title = info.videoDetails?.title;
       if (!title) return null;
       return {
         id: formatCameraId('youtube', nativeId),
@@ -86,7 +79,7 @@ export class YouTubeSource extends CameraSource {
         };
       } catch {
         throw new Error(
-          `YouTube stream ${nativeId} appears to be offline. yt-dlp and thumbnail fallback both failed.`
+          `YouTube stream ${nativeId} appears to be offline. Stream capture and thumbnail fallback both failed.`
         );
       }
     }
@@ -104,9 +97,6 @@ export class YouTubeSource extends CameraSource {
     return ['city', 'wildlife', 'nature', 'beach', 'landmark'];
   }
 
-  /**
-   * Build a YouTube search query from filters.
-   */
   private buildSearchQuery(filters: SearchFilters): string {
     const parts: string[] = ['live webcam'];
     if (filters.query) parts.push(filters.query);
@@ -117,73 +107,25 @@ export class YouTubeSource extends CameraSource {
   }
 
   /**
-   * Search YouTube for live streams using yt-dlp.
-   * Fast search (no per-result liveness check) — liveness is verified at capture time.
+   * Search YouTube for live streams using youtube-sr (npm package).
    */
-  private ytSearch(query: string, count: number): Promise<Camera[]> {
-    return new Promise((resolve) => {
-      execFile(
-        'yt-dlp',
-        [
-          '--flat-playlist',
-          '--print', '%(id)s\t%(title)s',
-          '--no-warnings',
-          '--no-playlist',
-          `ytsearch${count}:${query}`,
-        ],
-        { timeout: 20000, maxBuffer: 1024 * 1024 },
-        (error, stdout) => {
-          if (error) {
-            resolve([]);
-            return;
-          }
-          const cameras = String(stdout)
-            .trim()
-            .split('\n')
-            .filter((line) => line.includes('\t'))
-            .map((line) => {
-              const tabIdx = line.indexOf('\t');
-              const id = line.substring(0, tabIdx);
-              const title = line.substring(tabIdx + 1);
-              return {
-                id: formatCameraId('youtube', id),
-                source: 'youtube' as const,
-                title: title || `YouTube Live ${id}`,
-                country: 'unknown',
-                categories: ['other'] as string[],
-                status: 'active' as const,
-                streamUrl: `https://www.youtube.com/watch?v=${id}`,
-              };
-            });
-          resolve(cameras);
-        }
-      );
-    });
-  }
+  private async ytSearch(query: string, count: number): Promise<Camera[]> {
+    try {
+      const results = await YouTube.search(query, { type: 'video', limit: count });
 
-  /**
-   * Get a video's title via yt-dlp. Returns null if not found or not live.
-   */
-  private getVideoTitle(videoId: string): Promise<string | null> {
-    return new Promise((resolve) => {
-      execFile(
-        'yt-dlp',
-        [
-          '--get-title',
-          '--no-warnings',
-          '--no-playlist',
-          `https://www.youtube.com/watch?v=${videoId}`,
-        ],
-        { timeout: 10000, maxBuffer: 1024 * 1024 },
-        (error, stdout) => {
-          if (error) {
-            resolve(null);
-            return;
-          }
-          const title = String(stdout).trim().split('\n')[0];
-          resolve(title || null);
-        }
-      );
-    });
+      return results
+        .filter((v: any) => v.id && v.title)
+        .map((v: any) => ({
+          id: formatCameraId('youtube', v.id!),
+          source: 'youtube' as const,
+          title: v.title || `YouTube Live ${v.id}`,
+          country: 'unknown',
+          categories: ['other'] as string[],
+          status: 'active' as const,
+          streamUrl: `https://www.youtube.com/watch?v=${v.id}`,
+        }));
+    } catch {
+      return [];
+    }
   }
 }

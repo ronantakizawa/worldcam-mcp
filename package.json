@@ -28,7 +28,10 @@
   "author": "Ronan Takizawa",
   "license": "MIT",
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "@modelcontextprotocol/sdk": "^1.27.0",
+    "ffmpeg-static": "^5.3.0",
+    "youtube-sr": "^4.3.12",
     "zod": "^3.25.0"
   },
   "devDependencies": {

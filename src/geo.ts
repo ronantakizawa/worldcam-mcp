@@ -26,7 +26,7 @@ export interface GeoLocation {
   city?: string;
   region?: string;
   country?: string;
-  method: 'corelocation' | 'ip';
+  method: 'corelocation' | 'windows' | 'ip';
 }
 
 /**
@@ -69,6 +69,62 @@ async function detectViaCoreLocation(): Promise<GeoLocation> {
 }
 
 /**
+ * Try Windows Location API via PowerShell (Windows 10+).
+ * Uses WiFi/cell/GPS positioning through the WinRT Geolocator.
+ */
+async function detectViaWindows(): Promise<GeoLocation> {
+  const script = `
+try {
+  [Windows.Devices.Geolocation.Geolocator,Windows.Devices.Geolocation,ContentType=WindowsRuntime] | Out-Null
+  $gl = New-Object Windows.Devices.Geolocation.Geolocator
+  $gl.DesiredAccuracyInMeters = 10
+  $task = $gl.GetGeopositionAsync().AsTask()
+  if (-not $task.Wait(10000)) {
+    Write-Output '{"error":"timeout"}'
+    exit 1
+  }
+  $p = $task.Result.Coordinate
+  $lat = $p.Point.Position.Latitude
+  $lon = $p.Point.Position.Longitude
+  $acc = $p.Accuracy
+  Write-Output "{\`"latitude\`":$lat,\`"longitude\`":$lon,\`"accuracy\`":$acc}"
+} catch {
+  Write-Output "{\`"error\`":\`"$($_.Exception.Message)\`"}"
+  exit 1
+}
+`.trim();
+
+  return new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { timeout: 15000 },
+      (error, stdout) => {
+        try {
+          if (error) {
+            reject(new Error(`Windows Location failed: ${error.message}`));
+            return;
+          }
+          const data = JSON.parse(String(stdout).trim());
+          if (data.error) {
+            reject(new Error(`Windows Location error: ${data.error}`));
+            return;
+          }
+          resolve({
+            latitude: data.latitude,
+            longitude: data.longitude,
+            accuracy: data.accuracy,
+            method: 'windows',
+          });
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      }
+    );
+  });
+}
+
+/**
  * Fallback: detect location via IP geolocation.
  * Uses ip-api.com (free, no key required, 45 req/min).
  */
@@ -102,12 +158,20 @@ async function detectViaIp(): Promise<GeoLocation> {
 /**
  * Detect the current location.
  * On macOS: uses CoreLocation (WiFi-based, ~35m accuracy).
+ * On Windows: uses WinRT Geolocator via PowerShell (WiFi/cell/GPS).
  * Fallback: IP geolocation (city-level, may be wrong with VPN).
  */
 export async function detectLocation(): Promise<GeoLocation> {
   if (process.platform === 'darwin') {
     try {
       return await detectViaCoreLocation();
+    } catch {
+      // Fall through to IP
+    }
+  }
+  if (process.platform === 'win32') {
+    try {
+      return await detectViaWindows();
     } catch {
       // Fall through to IP
     }

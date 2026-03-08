@@ -1,6 +1,9 @@
 import { execFile } from 'child_process';
 import { writeFile, mkdir } from 'fs/promises';
 import { dirname } from 'path';
+import ffmpegStatic from 'ffmpeg-static';
+const ffmpegPath: string = ffmpegStatic as unknown as string;
+import ytdl from '@distube/ytdl-core';
 
 /**
  * Fetch a static image URL and return its buffer.
@@ -100,13 +103,13 @@ export async function fetchMjpegFrame(
 }
 
 /**
- * Grab one frame from an HLS stream using ffmpeg.
+ * Grab one frame from an HLS stream using ffmpeg-static (bundled via npm).
  */
 export async function captureHlsFrame(
   hlsUrl: string,
-  options: { ffmpegPath?: string; timeout?: number; referer?: string } = {}
+  options: { timeout?: number; referer?: string } = {}
 ): Promise<{ buffer: Buffer; mimeType: 'image/jpeg' }> {
-  const ffmpegPath = options.ffmpegPath || process.env.FFMPEG_PATH || 'ffmpeg';
+  const ffmpeg = ffmpegPath;
   const timeout = options.timeout ?? 15000;
 
   const args = [
@@ -128,7 +131,7 @@ export async function captureHlsFrame(
 
   return new Promise((resolve, reject) => {
     const proc = execFile(
-      ffmpegPath,
+      ffmpeg,
       args,
       {
         maxBuffer: 10 * 1024 * 1024,
@@ -148,81 +151,60 @@ export async function captureHlsFrame(
     );
 
     proc.on('error', (err) => {
-      reject(new Error(`ffmpeg not found or failed to start: ${err.message}`));
+      reject(new Error(`ffmpeg failed to start: ${err.message}`));
     });
   });
 }
 
 /**
- * Capture a frame from a YouTube live stream using yt-dlp + ffmpeg.
+ * Capture a frame from a YouTube live stream using @distube/ytdl-core + ffmpeg-static.
  */
 export async function captureYouTubeFrame(
   videoId: string,
   options: { timeout?: number } = {}
 ): Promise<{ buffer: Buffer; mimeType: 'image/jpeg' }> {
-  // Validate video ID format to prevent command injection
   if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     throw new Error(`Invalid YouTube video ID: ${videoId}`);
   }
 
   const timeout = options.timeout ?? 20000;
 
-  // First get the direct stream URL from yt-dlp
-  // --match-filter ensures we only grab actually-live streams (not VODs or redirected videos)
-  // --no-playlist prevents yt-dlp from following playlist/mix redirects
-  // --print urls,title lets us verify the stream hasn't been replaced by a different video
-  const streamUrl = await new Promise<string>((resolve, reject) => {
-    execFile(
-      'yt-dlp',
-      [
-        '--get-url',
-        '--get-title',
-        '-f', 'best[height<=720]',
-        '--no-warnings',
-        '--no-playlist',
-        '--match-filter', 'is_live',
-        `https://www.youtube.com/watch?v=${videoId}`,
-      ],
-      { timeout, maxBuffer: 1024 * 1024 },
-      (error, stdout) => {
-        if (error) {
-          return reject(new Error(`yt-dlp failed for ${videoId}: ${error.message}`));
-        }
-        const lines = String(stdout).trim().split('\n');
-        // With --get-title + --get-url, first line is title, second is URL
-        if (lines.length < 2 || !lines[1]) {
-          return reject(new Error(`yt-dlp returned no URL for ${videoId}`));
-        }
-        resolve(lines[1]);
-      }
-    );
+  // Get the direct stream URL via ytdl-core
+  const info = await ytdl.getInfo(`https://www.youtube.com/watch?v=${videoId}`, {
+    requestOptions: { headers: { 'User-Agent': 'Mozilla/5.0' } },
   });
 
-  // Then grab a frame with ffmpeg
-  return captureHlsFrame(streamUrl, { timeout });
+  // Prefer HLS live stream format
+  const hlsFormat = info.formats.find((f) => f.isHLS && f.hasVideo);
+  const bestFormat = hlsFormat || ytdl.chooseFormat(info.formats, {
+    quality: 'best',
+    filter: 'videoonly',
+  });
+
+  if (!bestFormat?.url) {
+    throw new Error(`No stream URL found for ${videoId}`);
+  }
+
+  return captureHlsFrame(bestFormat.url, { timeout });
 }
 
 /**
- * Check if ffmpeg is available on the system.
+ * Check if ffmpeg-static is available (always true since it's bundled via npm).
  */
-export async function isFfmpegAvailable(ffmpegPath?: string): Promise<boolean> {
-  const path = ffmpegPath || process.env.FFMPEG_PATH || 'ffmpeg';
+export async function isFfmpegAvailable(): Promise<boolean> {
+  if (!ffmpegPath) return false;
   return new Promise((resolve) => {
-    execFile(path, ['-version'], { timeout: 5000 }, (error) => {
+    execFile(ffmpegPath, ['-version'], { timeout: 5000 }, (error) => {
       resolve(!error);
     });
   });
 }
 
 /**
- * Check if yt-dlp is available on the system.
+ * Check if ytdl-core is available (always true since it's an npm dependency).
  */
 export async function isYtDlpAvailable(): Promise<boolean> {
-  return new Promise((resolve) => {
-    execFile('yt-dlp', ['--version'], { timeout: 5000 }, (error) => {
-      resolve(!error);
-    });
-  });
+  return true;
 }
 
 /**

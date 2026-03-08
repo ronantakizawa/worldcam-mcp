@@ -8,7 +8,7 @@ export class OpenWebcamDbSource extends CameraSource {
   readonly name = 'openwebcamdb' as const;
   readonly displayName = 'OpenWebcamDB';
   readonly requiresApiKey = true;
-  readonly requiresFfmpeg = true; // uses yt-dlp + ffmpeg for YouTube streams
+  readonly requiresFfmpeg = false; // ffmpeg bundled via ffmpeg-static npm package
 
   private apiKey: string | undefined;
   private cache = new Cache<unknown>(5 * 60 * 1000);
