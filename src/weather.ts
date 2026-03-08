@@ -1,4 +1,5 @@
 import { Cache } from './cache.js';
+import { haversineDistanceKm } from './geo.js';
 
 export interface WeatherContext {
   localTime: string;
@@ -106,6 +107,62 @@ export async function geocodeCity(city: string, country?: string): Promise<{ lat
     }
 
     const result = { lat: best.latitude, lon: best.longitude };
+    geocodeCache.set(cacheKey, result);
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Geocode a place name with proximity bias — pick the result closest to a
+ * known reference point (e.g. the parent city center). This solves the problem
+ * of neighborhood names like "Shibuya" matching random rural villages instead
+ * of the Tokyo ward, by preferring the result nearest the parent city.
+ * Returns null if no result is within maxDistanceKm of the reference point.
+ */
+export async function geocodeCityNear(
+  name: string,
+  country: string,
+  nearLat: number,
+  nearLon: number,
+  maxDistanceKm = 80,
+): Promise<{ lat: number; lon: number } | null> {
+  const cacheKey = `near:${name.toLowerCase()}:${country.toLowerCase()}:${nearLat.toFixed(2)},${nearLon.toFixed(2)}`;
+  if (geocodeCache.has(cacheKey)) return geocodeCache.get(cacheKey)!;
+
+  try {
+    const lang = COUNTRY_TO_LANG[country.toUpperCase()] || 'en';
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name)}&count=10&language=${lang}`;
+
+    const resp = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!resp.ok) return null;
+
+    const data = await resp.json() as {
+      results?: Array<{ latitude: number; longitude: number; country_code: string; population?: number }>;
+    };
+    if (!data.results || data.results.length === 0) {
+      geocodeCache.set(cacheKey, null);
+      return null;
+    }
+
+    // Filter to same country, then pick the result closest to the reference point
+    const cc = country.toUpperCase();
+    const candidates = data.results
+      .filter((r) => r.country_code === cc)
+      .map((r) => ({
+        lat: r.latitude,
+        lon: r.longitude,
+        dist: haversineDistanceKm(nearLat, nearLon, r.latitude, r.longitude),
+      }))
+      .sort((a, b) => a.dist - b.dist);
+
+    if (candidates.length === 0 || candidates[0].dist > maxDistanceKm) {
+      geocodeCache.set(cacheKey, null);
+      return null;
+    }
+
+    const result = { lat: candidates[0].lat, lon: candidates[0].lon };
     geocodeCache.set(cacheKey, result);
     return result;
   } catch {

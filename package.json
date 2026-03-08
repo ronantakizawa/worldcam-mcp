@@ -8,8 +8,13 @@
     "worldcam-mcp": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ronantakizawa/worldcam-mcp.git"
+  },
   "scripts": {
     "build": "tsc && shx chmod +x dist/*.js && shx cp -r src/helpers dist/helpers 2>/dev/null || true",
     "prepare": "npm run build",

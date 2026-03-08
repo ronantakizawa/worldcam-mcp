@@ -41,7 +41,7 @@ export async function fetchImage(
 export async function fetchMjpegFrame(
   url: string,
   options: { timeout?: number } = {}
-): Promise<{ buffer: Buffer; mimeType: 'image/jpeg' }> {
+): Promise<{ buffer: Buffer; mimeType: 'image/jpeg' | 'image/png' }> {
   const timeout = options.timeout ?? 5000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);
@@ -60,10 +60,11 @@ export async function fetchMjpegFrame(
 
     const contentType = resp.headers.get('content-type') || '';
 
-    // If it's a plain JPEG, just return the whole body
+    // If it's a plain image, just return the whole body
     if (contentType.startsWith('image/jpeg') || contentType.startsWith('image/png')) {
       const arrayBuf = await resp.arrayBuffer();
-      return { buffer: Buffer.from(arrayBuf), mimeType: 'image/jpeg' };
+      const mime = contentType.startsWith('image/png') ? 'image/png' : 'image/jpeg';
+      return { buffer: Buffer.from(arrayBuf), mimeType: mime };
     }
 
     // For multipart MJPEG streams, extract the first JPEG frame
@@ -72,26 +73,27 @@ export async function fetchMjpegFrame(
     }
 
     const reader = resp.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let totalBytes = 0;
+    let buf = Buffer.alloc(0);
     const maxBytes = 5 * 1024 * 1024; // 5MB safety limit
+    let searchOffset = 0;
 
-    while (totalBytes < maxBytes) {
+    while (buf.length < maxBytes) {
       const { done, value } = await reader.read();
       if (done) break;
-      chunks.push(value);
-      totalBytes += value.length;
+      buf = Buffer.concat([buf, value]);
 
-      // Concatenate and look for JPEG markers
-      const combined = Buffer.concat(chunks);
-      const soiIdx = combined.indexOf(Buffer.from([0xff, 0xd8]));
-      if (soiIdx === -1) continue;
+      // Only search the new portion for SOI marker
+      const soiIdx = buf.indexOf(Buffer.from([0xff, 0xd8]), searchOffset);
+      if (soiIdx === -1) {
+        searchOffset = Math.max(0, buf.length - 1);
+        continue;
+      }
 
-      const eoiIdx = combined.indexOf(Buffer.from([0xff, 0xd9]), soiIdx + 2);
+      const eoiIdx = buf.indexOf(Buffer.from([0xff, 0xd9]), soiIdx + 2);
       if (eoiIdx === -1) continue;
 
       // Found a complete JPEG frame
-      const jpeg = combined.subarray(soiIdx, eoiIdx + 2);
+      const jpeg = buf.subarray(soiIdx, eoiIdx + 2);
       reader.cancel();
       return { buffer: Buffer.from(jpeg), mimeType: 'image/jpeg' };
     }
@@ -201,9 +203,9 @@ export async function isFfmpegAvailable(): Promise<boolean> {
 }
 
 /**
- * Check if ytdl-core is available (always true since it's an npm dependency).
+ * Check if @distube/ytdl-core is available (always true since it's an npm dependency).
  */
-export async function isYtDlpAvailable(): Promise<boolean> {
+export async function isYtdlCoreAvailable(): Promise<boolean> {
   return true;
 }
 

@@ -211,13 +211,14 @@ export class SourceRegistry {
       .filter((x) => x.available)
       .map((x) => x.source);
 
-    // Ask each source for a large batch — sources return from cache so this is fast
+    // Ask each source for a large batch. First call may be slow (Skyline geocodes
+    // ~500 cities on first discovery), but subsequent calls are instant from cache.
     const results = await Promise.allSettled(
       availableSources.map((source) =>
         Promise.race([
           source.searchCameras({ category, limit: 5000 }),
           new Promise<Camera[]>((_, reject) =>
-            setTimeout(() => reject(new Error('timeout')), 10000)
+            setTimeout(() => reject(new Error('timeout')), 120000)
           ),
         ])
       )
@@ -299,8 +300,6 @@ export class SourceRegistry {
 
   /** Get all categories */
   getAllCategories(): string[] {
-    const cats = new Set<string>();
-    // Gather from all sources synchronously since categories are static
     return [
       'beach', 'city', 'traffic', 'mountain', 'wildlife',
       'airport', 'harbor', 'ski', 'park', 'landmark',

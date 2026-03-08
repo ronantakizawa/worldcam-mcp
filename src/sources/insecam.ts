@@ -5,28 +5,14 @@ import { fetchImage, fetchMjpegFrame } from '../screenshot.js';
 import { Cache } from '../cache.js';
 import { geocodeCity } from '../weather.js';
 
-// Country name to ISO alpha-2 mapping for insecam
-const COUNTRY_MAP: Record<string, string> = {
-  'US': 'US', 'JP': 'JP', 'DE': 'DE', 'IT': 'IT', 'FR': 'FR',
-  'RU': 'RU', 'KR': 'KR', 'GB': 'GB', 'TW': 'TW', 'NL': 'NL',
-  'CZ': 'CZ', 'ES': 'ES', 'TR': 'TR', 'AR': 'AR', 'BR': 'BR',
-  'IN': 'IN', 'MX': 'MX', 'CH': 'CH', 'AT': 'AT', 'SE': 'SE',
-  'NO': 'NO', 'FI': 'FI', 'IL': 'IL', 'UA': 'UA', 'PL': 'PL',
-  'CA': 'CA', 'AU': 'AU', 'IE': 'IE', 'BE': 'BE', 'RO': 'RO',
-  'BG': 'BG', 'DK': 'DK', 'VN': 'VN', 'TH': 'TH', 'ID': 'ID',
-  'SG': 'SG', 'MY': 'MY', 'PH': 'PH', 'CL': 'CL', 'CO': 'CO',
-  'ZA': 'ZA', 'NG': 'NG', 'KE': 'KE', 'EG': 'EG', 'HU': 'HU',
-};
-
-// Insecam uses full country names in URLs
-const ISO_TO_INSECAM_COUNTRY: Record<string, string> = {
-  'US': 'US', 'JP': 'JP', 'DE': 'DE', 'IT': 'IT', 'FR': 'FR',
-  'RU': 'RU', 'KR': 'KR', 'GB': 'GB', 'TW': 'TW', 'NL': 'NL',
-  'CZ': 'CZ', 'ES': 'ES', 'TR': 'TR', 'AR': 'AR', 'BR': 'BR',
-  'IN': 'IN', 'MX': 'MX', 'CH': 'CH', 'AT': 'AT', 'SE': 'SE',
-  'NO': 'NO', 'FI': 'FI', 'IL': 'IL', 'UA': 'UA', 'PL': 'PL',
-  'CA': 'CA', 'AU': 'AU', 'IE': 'IE', 'BE': 'BE', 'RO': 'RO',
-};
+// Supported ISO alpha-2 country codes for insecam
+const SUPPORTED_COUNTRIES = new Set([
+  'US', 'JP', 'DE', 'IT', 'FR', 'RU', 'KR', 'GB', 'TW', 'NL',
+  'CZ', 'ES', 'TR', 'AR', 'BR', 'IN', 'MX', 'CH', 'AT', 'SE',
+  'NO', 'FI', 'IL', 'UA', 'PL', 'CA', 'AU', 'IE', 'BE', 'RO',
+  'BG', 'DK', 'VN', 'TH', 'ID', 'SG', 'MY', 'PH', 'CL', 'CO',
+  'ZA', 'NG', 'KE', 'EG', 'HU',
+]);
 
 interface InsecamCamera {
   id: string;
@@ -139,7 +125,7 @@ export class InsecamSource extends CameraSource {
   }
 
   async getCountries(): Promise<string[]> {
-    return Object.keys(COUNTRY_MAP).sort();
+    return [...SUPPORTED_COUNTRIES].sort();
   }
 
   async getCategories(): Promise<Category[]> {
@@ -154,7 +140,7 @@ export class InsecamSource extends CameraSource {
     const cached = this.cache.get(cacheKey);
     if (cached) return cached;
 
-    const insecamCode = ISO_TO_INSECAM_COUNTRY[countryCode] || countryCode;
+    const insecamCode = countryCode;
     const url = `http://www.insecam.org/en/bycountry/${insecamCode}/?page=${page}`;
 
     try {

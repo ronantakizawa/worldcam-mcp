@@ -187,6 +187,130 @@ Ask Claude:
 
 > "Search for ski cameras in the Alps"
 
+## Nearest Camera Test Results
+
+Results from `find_nearest_camera` across 15 global locations. Cameras are geocoded at the neighborhood level in major cities using proximity-biased geocoding.
+
+### Tokyo, Japan (Shibuya)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 0.6 km | Tokyo - Shibuya Scramble Crossing | skyline |
+| 2.1 km | Tokyo - Nishiazabu | skyline |
+| 3.4 km | Panorama of Mount Fuji | skyline |
+
+### New York, USA (Times Square)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 0 km | Times Square, New York (4K) | earthcam |
+| 3.3 km | Skyline of Manhattan - New York | skyline |
+| 5.2 km | New York City Skyline | skyline |
+
+### Rome, Italy (Trevi Fountain)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 2.4 km | Piazza Santa Maria in Trastevere - Rome | skyline |
+| 2.5 km | Trevi Fountain - Rome | skyline |
+| 2.5 km | Piazza di Spagna - Rome | skyline |
+
+### Paris, France (Eiffel Tower)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 4 km | Paris - Notre Dame and Seine River | skyline |
+| 4 km | Paris - Sacre-Coeur | skyline |
+| 117.1 km | Saas-Fee - Mountain Dom | skyline |
+
+### London, UK (Big Ben)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 0.8 km | Horseferry Rd / Marsham St, London | dot |
+| 0.9 km | London - Walworth Road | skyline |
+| 0.9 km | London - Abbey Road | skyline |
+
+### Sydney, Australia (Opera House)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 1.4 km | Sydney | skyline |
+| 1.4 km | Panorama of Sydney | skyline |
+| 1.4 km | Sydney Harbour Bridge | skyline |
+
+### Dubai, UAE (Burj Khalifa)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 0 km | Dubai Skyline / Burj Khalifa | tourism |
+| 13.8 km | The Palm - Dubai | skyline |
+| 18.7 km | Dubai Marina | tourism |
+
+### Rio de Janeiro, Brazil (Copacabana)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 0.4 km | Copacabana - Rio de Janeiro | skyline |
+| 0.4 km | Copacabana | skyline |
+| 7.2 km | Christ the Redeemer - Rio de Janeiro | skyline |
+
+### Barcelona, Spain (Sagrada Familia)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 2.1 km | Sant Sebastia Beach - Barcelona | skyline |
+| 2.1 km | Tur Tur Catamaran Tour - Port Olimpic | skyline |
+| 2.1 km | Castelldefels - Spain | skyline |
+
+### Reykjavik, Iceland
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 2.6 km | Panorama of Reykjavik | skyline |
+| 2.6 km | Reykjavik - Mount Esja | skyline |
+| 42 km | Craters of Hagafell - Iceland | skyline |
+
+### Cape Town, South Africa
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 0.1 km | Cape Town - Clifton Beach | skyline |
+| 0.1 km | Cape Town | skyline |
+| 0.1 km | Table Mountain - Cape Town | skyline |
+
+### Kyoto, Japan (Fushimi Inari)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 3.7 km | Kyoto - Fushimi Inari Taisha Shrine | skyline |
+| 6.2 km | Kyoto - Hanamikoji Street | skyline |
+| 6.2 km | Kyoto - Station Bus Terminal | skyline |
+
+### Maui, Hawaii, USA
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 7.3 km | Kihei - Hawaii | skyline |
+| 7.3 km | Kahului - Hawaii | skyline |
+| 140.8 km | Mauna Kea - Live Astronomy | skyline |
+
+### Chamonix, France (Mont Blanc)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 0.1 km | Chamonix Town Center | ski |
+| 2.6 km | Brevent Arrival 2000m | ski |
+| 4.2 km | La Flegere, Chamonix | ski |
+
+### Yellowstone, USA (Old Faithful)
+
+| Distance | Camera | Source |
+|----------|--------|--------|
+| 19.4 km | Yellowstone National Park - Old Faithful | skyline |
+| 30.4 km | West Entrance, Yellowstone | nps |
+| 48.8 km | Mt. Washburn NE, Yellowstone | nps |
+
 ## License
 
 MIT

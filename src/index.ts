@@ -2,10 +2,32 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { resolve } from 'path';
+import { homedir } from 'os';
 import { SourceRegistry } from './sources/registry.js';
-import { CATEGORIES, SOURCE_NAMES, WorldcamError } from './types.js';
+import { CATEGORIES, SOURCE_NAMES, WorldcamError, type SourceName } from './types.js';
 import { saveToDisk } from './screenshot.js';
 import { detectLocation } from './geo.js';
+
+function validateSource(source: string | undefined): SourceName | undefined {
+  if (!source) return undefined;
+  if (SOURCE_NAMES.includes(source as SourceName)) return source as SourceName;
+  throw new WorldcamError(`Unknown source: "${source}". Valid sources: ${SOURCE_NAMES.join(', ')}`, 'INVALID_SOURCE');
+}
+
+/** Sanitize save_path to prevent path traversal. Only allows writing under cwd or home. */
+function validateSavePath(savePath: string): string {
+  const resolved = resolve(savePath);
+  const cwd = process.cwd();
+  const home = homedir();
+  if (!resolved.startsWith(cwd) && !resolved.startsWith(home)) {
+    throw new WorldcamError(
+      `save_path must be under the current directory or home directory. Got: ${resolved}`,
+      'INVALID_PATH'
+    );
+  }
+  return resolved;
+}
 
 const registry = new SourceRegistry();
 
@@ -62,7 +84,7 @@ server.tool(
         country: args.country,
         city: args.city,
         category: args.category,
-        source: args.source as any,
+        source: validateSource(args.source),
         query: args.query,
         limit: args.limit,
       });
@@ -121,7 +143,7 @@ server.tool(
         latitude: args.latitude,
         longitude: args.longitude,
         category: args.category,
-        source: args.source as any,
+        source: validateSource(args.source),
         limit: args.limit,
       });
 
@@ -175,9 +197,10 @@ server.tool(
       const result = await registry.getScreenshot(args.camera_id);
 
       if (args.save_path) {
+        const safePath = validateSavePath(args.save_path);
         result.savedPath = await saveToDisk(
           Buffer.from(result.imageBase64, 'base64'),
-          args.save_path
+          safePath
         );
       }
 
@@ -241,9 +264,10 @@ server.tool(
       });
 
       if (args.save_path) {
+        const safePath = validateSavePath(args.save_path);
         result.savedPath = await saveToDisk(
           Buffer.from(result.imageBase64, 'base64'),
-          args.save_path
+          safePath
         );
       }
 

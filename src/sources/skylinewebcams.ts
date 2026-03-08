@@ -3,7 +3,7 @@ import type { Camera, Category, SearchFilters } from '../types.js';
 import { formatCameraId, CameraOfflineError } from '../types.js';
 import { fetchImage, captureHlsFrame, isFfmpegAvailable } from '../screenshot.js';
 import { Cache } from '../cache.js';
-import { geocodeCity } from '../weather.js';
+import { geocodeCity, geocodeCityNear } from '../weather.js';
 
 interface DiscoveredCam {
   slug: string;
@@ -278,21 +278,23 @@ export class SkylineWebcamsSource extends CameraSource {
   }
 
   /**
-   * Batch geocode unique (city, country) pairs and assign coordinates to cameras.
+   * Batch geocode cameras and assign coordinates.
    * Uses parallel requests with concurrency limit to stay fast.
    * Geocode results are cached 24 hours, so subsequent calls are near-instant.
    *
-   * Strategy:
-   *   1. Geocode slug-derived city name (e.g., "Roma" from slug)
-   *   2. If that fails, try extracting a location from the camera title (e.g., "Trevi Fountain - Rome")
-   *   3. If slug has <3 parts (no city), try region name (parts[1])
+   * Strategy (3 phases, each more specific):
+   *   Phase 1: Geocode the slug city name (parts[2]) — covers most cameras
+   *   Phase 2: For large cities (many cameras share one coord), refine using
+   *            neighborhood/landmark from the cam-name slug (parts[3])
+   *   Phase 3: For cameras still missing coords, try extracting location from title
    */
   private async enrichWithCoordinates(cams: DiscoveredCam[]): Promise<void> {
-    // Phase 1: Collect unique (city, country) pairs from slugs
+    const BATCH_SIZE = 25;
+
+    // --- Phase 1: Geocode slug city (parts[2]) ---
     const cityMap = new Map<string, { city: string; country: string }>();
     for (const cam of cams) {
       const parts = cam.slug.split('/');
-      // Try city (parts[2]) first, fallback to region (parts[1])
       const citySlug = parts.length >= 3 ? parts[2] : (parts.length >= 2 ? parts[1] : null);
       if (!citySlug) continue;
       const city = citySlug.replace(/-/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
@@ -302,10 +304,8 @@ export class SkylineWebcamsSource extends CameraSource {
       }
     }
 
-    // Geocode in parallel batches of 25
     const entries = [...cityMap.entries()];
     const coordResults = new Map<string, { lat: number; lon: number }>();
-    const BATCH_SIZE = 25;
 
     for (let i = 0; i < entries.length; i += BATCH_SIZE) {
       const batch = entries.slice(i, i + BATCH_SIZE);
@@ -317,7 +317,7 @@ export class SkylineWebcamsSource extends CameraSource {
       );
     }
 
-    // Assign coordinates to cameras
+    // Assign city-level coordinates
     for (const cam of cams) {
       const parts = cam.slug.split('/');
       const citySlug = parts.length >= 3 ? parts[2] : (parts.length >= 2 ? parts[1] : null);
@@ -331,13 +331,68 @@ export class SkylineWebcamsSource extends CameraSource {
       }
     }
 
-    // Phase 2: For cameras still missing coords, try extracting location from title
+    // --- Phase 2: Refine large cities using neighborhood from cam-name slug ---
+    // Group cameras by their city-level coordinates to find large clusters
+    const coordGroups = new Map<string, DiscoveredCam[]>();
+    for (const cam of cams) {
+      if (cam.latitude == null) continue;
+      const coordKey = `${cam.latitude.toFixed(4)},${cam.longitude!.toFixed(4)}`;
+      if (!coordGroups.has(coordKey)) coordGroups.set(coordKey, []);
+      coordGroups.get(coordKey)!.push(cam);
+    }
+
+    // For clusters with 5+ cameras, geocode neighborhoods with proximity bias
+    // toward the parent city — picks the geocode result nearest the city center
+    const neighborhoodMap = new Map<string, { name: string; country: string; cityLat: number; cityLon: number }>();
+    const camToNbrKey = new Map<DiscoveredCam, string>();
+
+    for (const [, group] of coordGroups) {
+      if (group.length < 5) continue;
+      const cityLat = group[0].latitude!;
+      const cityLon = group[0].longitude!;
+
+      for (const cam of group) {
+        const parts = cam.slug.split('/');
+        if (parts.length < 4) continue;
+
+        const neighborhood = this.extractNeighborhood(parts[3], parts[2]);
+        if (!neighborhood) continue;
+
+        const key = `nbr:${neighborhood.toLowerCase()}:${cam.country}:${cityLat.toFixed(2)}`;
+        if (!neighborhoodMap.has(key)) {
+          neighborhoodMap.set(key, { name: neighborhood, country: cam.country, cityLat, cityLon });
+        }
+        camToNbrKey.set(cam, key);
+      }
+    }
+
+    const nbrEntries = [...neighborhoodMap.entries()];
+    const nbrCoords = new Map<string, { lat: number; lon: number }>();
+
+    for (let i = 0; i < nbrEntries.length; i += BATCH_SIZE) {
+      const batch = nbrEntries.slice(i, i + BATCH_SIZE);
+      await Promise.allSettled(
+        batch.map(async ([key, { name, country, cityLat, cityLon }]) => {
+          const coords = await geocodeCityNear(name, country, cityLat, cityLon);
+          if (coords) nbrCoords.set(key, coords);
+        })
+      );
+    }
+
+    for (const [cam, key] of camToNbrKey) {
+      const coords = nbrCoords.get(key);
+      if (coords) {
+        cam.latitude = coords.lat;
+        cam.longitude = coords.lon;
+      }
+    }
+
+    // --- Phase 3: For cameras still missing coords, try extracting location from title ---
     const missing = cams.filter((c) => c.latitude == null);
     if (missing.length === 0) return;
 
     const titleMap = new Map<string, { city: string; country: string }>();
     for (const cam of missing) {
-      // Title patterns: "City Name - Landmark", "Landmark - City", "Landmark, City"
       const titleCity = this.extractCityFromTitle(cam.title);
       if (titleCity) {
         const key = `title:${titleCity}:${cam.country}`;
@@ -373,6 +428,45 @@ export class SkylineWebcamsSource extends CameraSource {
   }
 
   /**
+   * Extract a geocodable neighborhood name from a cam-name slug,
+   * stripping the parent city name and generic terms.
+   * E.g., for city="tokyo":
+   *   "tokyo-shibuya-scramble-crossing" → "Shibuya"
+   *   "shinjuku-kabukicho" → "Shinjuku"
+   *   "panorama-di-tokyo" → null (generic)
+   */
+  private extractNeighborhood(camSlug: string, citySlug?: string): string | null {
+    // Skip generic/non-location slugs
+    if (/^(panorama|streets?|city|webcam|live|view|beach|port|harbor|skyline|train-station|bus-terminal|shinkansen|mediterranean)/.test(camSlug)) {
+      return null;
+    }
+
+    const parts = camSlug.split('-');
+    // Remove the parent city name (e.g., "tokyo" from "tokyo-shibuya-...")
+    const cityWord = citySlug?.toLowerCase();
+    const GENERIC = new Set([
+      'panorama', 'di', 'del', 'della', 'of', 'the',
+      'street', 'streets', 'crossing', 'gate', 'station',
+      'road', 'park', 'bridge', 'tower', 'castle', 'shrine', 'temple', 'market',
+      'dome', 'harbor', 'airport', 'international', 'live', 'webcam', 'cam',
+      'slopes', 'terrace', 'resort', 'center', 'downtown', 'square',
+      'district', 'scramble', 'shopping', 'onsen', 'springs', 'volcano',
+      'mediterranean', 'shinkansen', 'trains', 'train', 'bus', 'terminal',
+      'panoramic', 'view', 'skyline', '60', 'sunshine',
+    ]);
+
+    const filtered = parts.filter((p) => !GENERIC.has(p) && p !== cityWord && p.length > 1);
+
+    if (filtered.length === 0) return null;
+
+    // Take just the first word as the neighborhood name for clean geocoding
+    const name = filtered[0].replace(/\b\w/g, (c) => c.toUpperCase());
+    if (name.length < 3) return null;
+
+    return name;
+  }
+
+  /**
    * Try to extract a city/location name from a camera title.
    * Handles: "Landmark - City", "City - Landmark", "View of City"
    */
@@ -383,7 +477,10 @@ export class SkylineWebcamsSource extends CameraSource {
     if (dashParts.length >= 2) {
       // Return the shorter part (likely the city, not the landmark description)
       const sorted = [...dashParts].sort((a, b) => a.length - b.length);
-      return sorted[0].trim();
+      const candidate = sorted[0].trim();
+      // Skip country names and very generic terms — they geocode to capitals
+      if (TITLE_SKIP_WORDS.has(candidate.toLowerCase())) return null;
+      return candidate;
     }
     return null;
   }
@@ -473,3 +570,13 @@ const SLUG_TO_ISO: Record<string, string> = {
   'armenia': 'AM', 'azerbaijan': 'AZ', 'uzbekistan': 'UZ',
   'kazahstan': 'KZ', 'liechtenstein': 'LI',
 };
+
+/** Words to skip when extracting city from title (country names, generic terms). */
+const TITLE_SKIP_WORDS = new Set([
+  'japan', 'italy', 'spain', 'france', 'germany', 'greece', 'usa', 'uk',
+  'australia', 'brazil', 'mexico', 'canada', 'india', 'china', 'korea',
+  'portugal', 'turkey', 'egypt', 'israel', 'norway', 'iceland', 'malta',
+  'croatia', 'slovenia', 'romania', 'hungary', 'poland', 'sweden',
+  'finland', 'denmark', 'ireland', 'austria', 'switzerland', 'belgium',
+  'netherlands', 'czech republic', 'slovakia', 'live', 'webcam', 'panorama',
+]);
