@@ -1,0 +1,40 @@
+{
+  "name": "worldcam-mcp",
+  "version": "1.0.0",
+  "description": "MCP server giving AI agents access to live camera screenshots from around the world",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "worldcam-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc && shx chmod +x dist/*.js && shx cp -r src/helpers dist/helpers 2>/dev/null || true",
+    "prepare": "npm run build",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test": "node --import tsx --test test/*.test.ts"
+  },
+  "keywords": [
+    "mcp",
+    "webcam",
+    "live-camera",
+    "screenshot",
+    "claude",
+    "ai"
+  ],
+  "author": "Ronan Takizawa",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.9.0",
+    "shx": "^0.3.4",
+    "tsx": "^4.0.0",
+    "typescript": "^5.2.2"
+  }
+}
