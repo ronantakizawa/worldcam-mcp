@@ -1,9 +1,17 @@
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 import { CameraSource } from './base.js';
 import type { Camera, Category, SearchFilters } from '../types.js';
 import { formatCameraId, CameraOfflineError } from '../types.js';
 import { fetchImage, captureHlsFrame, isFfmpegAvailable } from '../screenshot.js';
 import { Cache } from '../cache.js';
 import { geocodeCity, geocodeCityNear } from '../weather.js';
+
+const DISK_CACHE_DIR = join(homedir(), '.worldcam-mcp');
+const SKYLINE_CACHE_FILE = join(DISK_CACHE_DIR, 'skyline-cameras.json');
+/** Disk cache TTL: 6 hours. Cameras don't change often. */
+const DISK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
 interface DiscoveredCam {
   slug: string;
@@ -137,17 +145,40 @@ export class SkylineWebcamsSource extends CameraSource {
   ];
 
   /**
-   * Discover cameras by scraping all listing + category pages in parallel.
-   * Returns slug + title + inferred country. Cached for 1 hour.
+   * Discover cameras. Loads from disk cache instantly on startup,
+   * falls back to network scrape + geocoding if no cache exists.
+   * Stale disk cache is refreshed in the background.
    */
   private async discoverCameras(): Promise<DiscoveredCam[]> {
-    const cached = this.camListCache.get('all');
-    if (cached) return cached;
+    // 1. Memory cache (hot path, <1ms)
+    const memCached = this.camListCache.get('all');
+    if (memCached) return memCached;
 
+    // 2. Disk cache (warm path, ~50ms)
+    const diskResult = this.loadFromDisk();
+    if (diskResult) {
+      // Populate memory cache and nkey cache
+      for (const cam of diskResult) {
+        if (cam.nkey) this.nkeyCache.set(cam.slug, cam.nkey);
+      }
+      this.camListCache.set('all', diskResult);
+
+      // Refresh in background if disk cache is getting stale (>3 hours old)
+      if (this.isDiskCacheStale()) {
+        this.refreshInBackground();
+      }
+      return diskResult;
+    }
+
+    // 3. Network scrape (cold path, ~12-50s)
+    return this.scrapeAndCache();
+  }
+
+  /** Full network scrape → geocode → persist to memory + disk. */
+  private async scrapeAndCache(): Promise<DiscoveredCam[]> {
     const seen = new Set<string>();
     const cams: DiscoveredCam[] = [];
 
-    // Fetch all listing pages in parallel (with individual timeouts)
     const results = await Promise.allSettled(
       SkylineWebcamsSource.LISTING_PAGES.map((url) => this.scrapePage(url))
     );
@@ -162,11 +193,52 @@ export class SkylineWebcamsSource extends CameraSource {
       }
     }
 
-    // Enrich cameras with coordinates via batch geocoding
     await this.enrichWithCoordinates(cams);
 
     this.camListCache.set('all', cams);
+    this.saveToDisk(cams);
     return cams;
+  }
+
+  private _refreshing = false;
+  /** Refresh the camera list in the background without blocking callers. */
+  private refreshInBackground(): void {
+    if (this._refreshing) return;
+    this._refreshing = true;
+    this.scrapeAndCache()
+      .catch(() => {})
+      .finally(() => { this._refreshing = false; });
+  }
+
+  private loadFromDisk(): DiscoveredCam[] | null {
+    try {
+      const raw = readFileSync(SKYLINE_CACHE_FILE, 'utf-8');
+      const data = JSON.parse(raw) as { cameras: DiscoveredCam[]; savedAt: number };
+      if (Date.now() - data.savedAt > DISK_CACHE_TTL_MS) return null; // Expired
+      if (!data.cameras || data.cameras.length === 0) return null;
+      return data.cameras;
+    } catch {
+      return null;
+    }
+  }
+
+  private isDiskCacheStale(): boolean {
+    try {
+      const raw = readFileSync(SKYLINE_CACHE_FILE, 'utf-8');
+      const data = JSON.parse(raw) as { savedAt: number };
+      return Date.now() - data.savedAt > DISK_CACHE_TTL_MS / 2; // Refresh after half TTL
+    } catch {
+      return true;
+    }
+  }
+
+  private saveToDisk(cams: DiscoveredCam[]): void {
+    try {
+      mkdirSync(DISK_CACHE_DIR, { recursive: true });
+      writeFileSync(SKYLINE_CACHE_FILE, JSON.stringify({ cameras: cams, savedAt: Date.now() }));
+    } catch {
+      // Non-critical
+    }
   }
 
   /**

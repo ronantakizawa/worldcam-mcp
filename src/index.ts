@@ -30,6 +30,7 @@ function validateSavePath(savePath: string): string {
 }
 
 const registry = new SourceRegistry();
+registry.warmup(); // Pre-warm Skyline cache in background before any tool calls
 
 const server = new McpServer({
   name: 'worldcam-mcp',

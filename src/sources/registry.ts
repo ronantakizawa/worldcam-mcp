@@ -18,6 +18,7 @@ import { TourismSource } from './tourism.js';
 
 export class SourceRegistry {
   private sources = new Map<SourceName, CameraSource>();
+  private _warmupPromise: Promise<void> | null = null;
 
   constructor() {
     const allSources: CameraSource[] = [
@@ -38,6 +39,28 @@ export class SourceRegistry {
     for (const source of allSources) {
       this.sources.set(source.name, source);
     }
+  }
+
+  /**
+   * Pre-warm the Skyline camera cache in the background.
+   * Call once at startup — subsequent tool calls will hit the warm cache.
+   */
+  warmup(): void {
+    if (this._warmupPromise) return;
+    this._warmupPromise = (async () => {
+      try {
+        const skyline = this.sources.get('skyline');
+        if (skyline) {
+          const start = Date.now();
+          await skyline.searchCameras({ limit: 1 }); // triggers full discovery + geocoding
+          process.stderr.write(
+            `[worldcam] Skyline pre-warm complete: ${Date.now() - start}ms\n`
+          );
+        }
+      } catch {
+        // Non-fatal — will retry on first real call
+      }
+    })();
   }
 
   getSource(name: SourceName): CameraSource {
@@ -61,7 +84,8 @@ export class SourceRegistry {
       return source.searchCameras({ ...filters, limit });
     }
 
-    // Fan out to all available sources in parallel
+    // Fan out to all available sources in parallel with early return.
+    // As soon as we have enough results, resolve immediately.
     const sourceEntries = [...this.sources.values()];
     const availableChecks = await Promise.all(
       sourceEntries.map(async (s) => ({ source: s, available: await s.isAvailable() }))
@@ -70,25 +94,28 @@ export class SourceRegistry {
       .filter((x) => x.available)
       .map((x) => x.source);
 
-    // Give each source a per-source limit and timeout
     const perSourceLimit = Math.ceil(limit / availableSources.length) + 2;
-    const results = await Promise.allSettled(
-      availableSources.map((source) =>
-        Promise.race([
-          source.searchCameras({ ...filters, limit: perSourceLimit }),
-          new Promise<Camera[]>((_, reject) =>
-            setTimeout(() => reject(new Error('timeout')), 5000)
-          ),
-        ])
-      )
-    );
-
     const allCameras: Camera[] = [];
-    for (const result of results) {
-      if (result.status === 'fulfilled') {
-        allCameras.push(...result.value);
-      }
-    }
+    const abort = new AbortController();
+
+    await Promise.allSettled(
+      availableSources.map(async (source) => {
+        try {
+          const cameras = await Promise.race([
+            source.searchCameras({ ...filters, limit: perSourceLimit }),
+            new Promise<Camera[]>((_, reject) => {
+              const timer = setTimeout(() => reject(new Error('timeout')), 5000);
+              abort.signal.addEventListener('abort', () => { clearTimeout(timer); reject(new Error('abort')); });
+            }),
+          ]);
+          allCameras.push(...cameras);
+          // Early return: once we have enough results, abort remaining slow sources
+          if (allCameras.length >= limit) abort.abort();
+        } catch {
+          // Source failed or timed out — continue with others
+        }
+      })
+    );
 
     return allCameras.slice(0, limit);
   }
@@ -175,12 +202,25 @@ export class SourceRegistry {
   }): Promise<Array<Camera & { distanceKm: number }>> {
     const limit = params.limit ?? 5;
 
-    // Gather cameras from all sources — need a large pool for proximity search.
-    // Each source returns up to its full inventory since we need geographic coverage.
-    const cameras = await this.getAllCamerasWithCoords(params.source, params.category);
+    // Gather cameras from all sources in parallel:
+    // 1. Static sources: full inventory (cached after first call)
+    // 2. Windy: nearby API search (250km radius, up to 50 results)
+    const [staticCameras, windyCameras] = await Promise.all([
+      this.getAllCamerasWithCoords(params.source, params.category),
+      this.getWindyNearbyCameras(params.latitude, params.longitude, params.source),
+    ]);
+
+    // Merge, deduplicate by ID
+    const seen = new Set<string>();
+    const allCameras: Camera[] = [];
+    for (const cam of [...staticCameras, ...windyCameras]) {
+      if (seen.has(cam.id)) continue;
+      seen.add(cam.id);
+      allCameras.push(cam);
+    }
 
     // Compute distance (all cameras already have coordinates)
-    const withDistance = cameras.map((c) => ({
+    const withDistance = allCameras.map((c) => ({
       ...c,
       distanceKm: Math.round(
         haversineDistanceKm(params.latitude, params.longitude, c.latitude!, c.longitude!) * 10
@@ -190,6 +230,28 @@ export class SourceRegistry {
     // Sort by distance and return top N
     withDistance.sort((a, b) => a.distanceKm - b.distanceKm);
     return withDistance.slice(0, limit);
+  }
+
+  /**
+   * Get nearby cameras from Windy's API (if available).
+   * Uses the nearby endpoint with 250km radius for global coverage.
+   */
+  private async getWindyNearbyCameras(
+    lat: number,
+    lon: number,
+    sourceName?: SourceName,
+  ): Promise<Camera[]> {
+    // Skip if a non-windy source is specifically requested
+    if (sourceName && sourceName !== 'windy') return [];
+
+    const windy = this.sources.get('windy');
+    if (!windy || !(await windy.isAvailable())) return [];
+
+    try {
+      return await (windy as WindySource).searchNearby(lat, lon, 250, 50);
+    } catch {
+      return [];
+    }
   }
 
   /**

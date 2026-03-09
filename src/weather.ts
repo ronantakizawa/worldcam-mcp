@@ -1,3 +1,6 @@
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { join } from 'path';
+import { homedir } from 'os';
 import { Cache } from './cache.js';
 import { haversineDistanceKm } from './geo.js';
 
@@ -19,8 +22,64 @@ export interface WeatherContext {
 
 // Cache weather by rounded coords for 15 min
 const weatherCache = new Cache<WeatherContext>(15 * 60 * 1000);
-// Cache geocode results for 24 hours
+// Cache geocode results for 24 hours (in-memory)
 const geocodeCache = new Cache<{ lat: number; lon: number } | null>(24 * 60 * 60 * 1000);
+
+// --- Persistent disk cache for geocode results ---
+const DISK_CACHE_DIR = join(homedir(), '.worldcam-mcp');
+const DISK_CACHE_FILE = join(DISK_CACHE_DIR, 'geocode-cache.json');
+
+type DiskCacheData = Record<string, { lat: number; lon: number } | null>;
+
+/** Load geocode cache from disk into memory on startup. */
+function loadDiskCache(): void {
+  try {
+    const raw = readFileSync(DISK_CACHE_FILE, 'utf-8');
+    const data: DiskCacheData = JSON.parse(raw);
+    let count = 0;
+    for (const [key, value] of Object.entries(data)) {
+      if (!geocodeCache.has(key)) {
+        geocodeCache.set(key, value);
+        count++;
+      }
+    }
+    if (count > 0) process.stderr.write(`[worldcam] Loaded ${count} cached geocodes from disk\n`);
+  } catch {
+    // File doesn't exist yet or is corrupted — that's fine
+  }
+}
+
+/** Batch pending disk writes and flush on a debounce timer. */
+let pendingWrites: DiskCacheData = {};
+let flushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function flushToDisk(): void {
+  flushTimer = null;
+  if (Object.keys(pendingWrites).length === 0) return;
+  try {
+    let data: DiskCacheData = {};
+    try {
+      data = JSON.parse(readFileSync(DISK_CACHE_FILE, 'utf-8'));
+    } catch { /* empty */ }
+    Object.assign(data, pendingWrites);
+    pendingWrites = {};
+    mkdirSync(DISK_CACHE_DIR, { recursive: true });
+    writeFileSync(DISK_CACHE_FILE, JSON.stringify(data));
+  } catch {
+    // Non-critical — memory cache still works
+  }
+}
+
+/** Queue a geocode result for batched disk persistence. */
+function persistToDisk(key: string, value: { lat: number; lon: number } | null): void {
+  pendingWrites[key] = value;
+  if (!flushTimer) {
+    flushTimer = setTimeout(flushToDisk, 2000); // Flush every 2s
+  }
+}
+
+// Load disk cache on module import
+loadDiskCache();
 
 /**
  * Fetch current weather for a location using Open-Meteo (free, no API key).
@@ -88,6 +147,7 @@ export async function geocodeCity(city: string, country?: string): Promise<{ lat
     };
     if (!data.results || data.results.length === 0) {
       geocodeCache.set(cacheKey, null);
+      persistToDisk(cacheKey, null);
       return null;
     }
 
@@ -108,6 +168,7 @@ export async function geocodeCity(city: string, country?: string): Promise<{ lat
 
     const result = { lat: best.latitude, lon: best.longitude };
     geocodeCache.set(cacheKey, result);
+    persistToDisk(cacheKey, result);
     return result;
   } catch {
     return null;
@@ -159,11 +220,13 @@ export async function geocodeCityNear(
 
     if (candidates.length === 0 || candidates[0].dist > maxDistanceKm) {
       geocodeCache.set(cacheKey, null);
+      persistToDisk(cacheKey, null);
       return null;
     }
 
     const result = { lat: candidates[0].lat, lon: candidates[0].lon };
     geocodeCache.set(cacheKey, result);
+    persistToDisk(cacheKey, result);
     return result;
   } catch {
     return null;
