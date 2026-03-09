@@ -4,7 +4,8 @@ Give AI Acess to the physical world.
 
 This MCP server gives AI agents access to live camera screenshots from around the world by aggregating 12 camera sources and returns real base64-encoded images that agents can see and analyze.
 
-<img width="1024" height="1024" alt="WorldCam MCP" src="https://github.com/user-attachments/assets/af3ad5bb-ee13-40a1-9b83-984cc2bb11e8" />
+<img width="40" height="40" alt="Untitled design (2)" src="https://github.com/user-attachments/assets/916455b6-4339-4094-a661-41d4c2419a35" />
+
 
 
 ## Features
